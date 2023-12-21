@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Display a map on a webpage</title>
+    <meta
+      name="viewport"
+      content="initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <link
+      href="https://api.mapbox.com/mapbox-gl-js/v2.13.0/mapbox-gl.css"
+      rel="stylesheet"
+    />
+    <script src="https://api.mapbox.com/mapbox-gl-js/v2.13.0/mapbox-gl.js"></script>
+    <script
+      async
+      src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"
+    ></script>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
+      #map {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 100%;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="map"></div>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.135.0/build/three.module.js",
+          "three/examples/jsm/": "https://unpkg.com/three@0.140.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { DebugTilesRenderer as TilesRenderer } from "./3DTilesRendererJS/index.js";
+
+      window.THREE = THREE;
+
+      var origin = [113.37796671195645, 22.994043025862794];
+
+      mapboxgl.accessToken =
+        "pk.eyJ1IjoieGlheGlhbmdmbmVnIiwiYSI6ImNscWYyNjU3azByd3gya3JxOTVrc2NkY3UifQ.362MspMnDi9ZGH-D6P1CtQ";
+      const map = new mapboxgl.Map({
+        container: "map",
+        style: "mapbox://styles/mapbox/dark-v9",
+        center: origin,
+        zoom: 17.86614600777933,
+        pitch: 70,
+        bearing: -40,
+      });
+
+      const marker1 = new mapboxgl.Marker().setLngLat(origin).addTo(map);
+
+      let centerM;
+
+      function rotationBetweenDirections(dir1, dir2) {
+        const rotation = new THREE.Quaternion();
+        const a = new THREE.Vector3().crossVectors(dir1, dir2);
+        rotation.x = a.x;
+        rotation.y = a.y;
+        rotation.z = a.z;
+        rotation.w = 1 + dir1.clone().dot(dir2);
+        rotation.normalize();
+
+        return rotation;
+      }
+
+      map.on("load", () => {
+        let renderer, scene, camera, world, tiles;
+        const mixers = [];
+
+        map.addLayer({
+          id: "custom_layer",
+          type: "custom",
+          renderingMode: "3d",
+          onAdd: function (map, mbxContext) {
+            const center = map.getCenter();
+            this.center = mapboxgl.MercatorCoordinate.fromLngLat(
+              [center.lng, center.lat],
+              0
+            );
+            centerM = this.center;
+
+            const { x, y, z } = centerM;
+
+            const scale = centerM.meterInMercatorCoordinateUnits();
+
+            this.cameraTransform = new THREE.Matrix4()
+              .makeTranslation(x, y, z)
+              .scale(new THREE.Vector3(scale, -scale, scale));
+
+            renderer = new THREE.WebGLRenderer({
+              alpha: true,
+              antialias: true,
+              canvas: map.getCanvas(),
+              context: mbxContext,
+            });
+
+            renderer.shadowMap.enabled = true;
+            renderer.autoClear = false;
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(
+              28,
+              window.innerWidth / window.innerHeight,
+              0.000000000001,
+              Infinity
+            );
+
+            const url = "./baowei21/tileset.json";
+
+            tiles = new TilesRenderer(url);
+
+            tiles.onLoadTileSet = (tileset) => {
+              const box = new THREE.Box3();
+              const sphere = new THREE.Sphere();
+              const matrix = new THREE.Matrix4();
+
+              let position;
+              let distanceToEllipsoidCenter;
+
+              if (tiles.getOrientedBounds(box, matrix)) {
+                position = new THREE.Vector3().setFromMatrixPosition(matrix);
+                distanceToEllipsoidCenter = position.length();
+              } else if (tiles.getBoundingSphere(sphere)) {
+                position = sphere.center.clone();
+                distanceToEllipsoidCenter = position.length();
+              }
+
+              const surfaceDirection = position.normalize();
+              const up = new THREE.Vector3(0, 1, 0);
+              const rotationToNorthPole = rotationBetweenDirections(
+                surfaceDirection,
+                up
+              );
+
+              tiles.group.quaternion.x = rotationToNorthPole.x;
+              tiles.group.quaternion.y = rotationToNorthPole.y;
+              tiles.group.quaternion.z = rotationToNorthPole.z;
+              tiles.group.quaternion.w = rotationToNorthPole.w;
+
+              tiles.group.position.y = -distanceToEllipsoidCenter;
+            };
+
+            tiles.setCamera(camera);
+            tiles.setResolutionFromRenderer(camera, renderer);
+
+            world = new THREE.Group();
+
+            world.add(tiles.group);
+            scene.add(world);
+          },
+
+          render: function (gl, matrix) {
+            const mercatorMatrix = new THREE.Matrix4().fromArray(matrix);
+            camera.projectionMatrix = mercatorMatrix.multiply(
+              this.cameraTransform
+            );
+
+            renderer.resetState();
+
+            tiles.update();
+            // Render the scene and repaint the map
+            renderer.render(scene, camera);
+            map.triggerRepaint();
+          },
+        });
+      });
+    </script>
+  </body>
+</html>
